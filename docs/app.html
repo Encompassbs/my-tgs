@@ -1952,6 +1952,8 @@ const SIGNS = {
   FENCE: { code: '', name: 'Pedestrian fence', shape: 'fence' },
   TMA: { code: '', name: 'Truck mounted attenuator', shape: 'tma' },
 };
+// ROADWORK AHEAD with "40 AHEAD" (company option for 80 to 100 km/h shuttles)
+[40, 50, 60].forEach((v) => { SIGNS['AHEAD' + v] = { code: '', name: `Roadwork ahead, ${v} ahead`, pair: [{ bg: '#FFD200', lines: ['ROADWORK', 'AHEAD'] }, { bg: '#FFD200', lines: [`${v}`, 'AHEAD'] }] }; });
 [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].forEach((k) => { SIGNS['RWNEXT' + k] = { code: '', name: `Roadwork next ${k} km`, shape: 'rect', lines: ['ROADWORK', `NEXT ${k} km`] }; });
 [30, 40, 50, 60, 70, 80, 90, 100, 110].forEach((v) => {
   SIGNS['SPEED' + v] = { code: 'R4-1', name: `${v} km/h speed limit`, shape: 'speed', value: v, reg: true };
@@ -2923,6 +2925,9 @@ function layoutScheme(inp, job) {
   const vals = {};
   const use = (key, table, sp, label) => { const r = ruleAt(table, sp); vals[key] = { v: r.v, c: r.c, sp, label }; return r.v; };
   let D = use('D', RULES.signSpacing, posted, 'Sign spacing D');
+  // ROADWORK AHEAD carries the workers symbol on its frame (Victorian practice), so a separate WORKERS sign is only added
+  // when the company asks for one; with a lowered limit the workers symbol goes on the limit frame as before
+  const wkrSep = state.prefs?.workerSign === 'separate';
   if (companySpacing(posted) > D) { D = companySpacing(posted); Object.assign(vals.D, { v: D, c: 'S', label: `Sign spacing D (${spacingLabel()})` }); }
   let buffer = use('buffer', RULES.buffer, posted, 'Safety buffer');
   if (d.road.crest) { buffer = Math.round((buffer * 1.5) / 5) * 5; vals.buffer.v = buffer; }
@@ -2982,7 +2987,7 @@ function layoutScheme(inp, job) {
   const offsetOK = divided || !two || (lanesEach(d.road) >= 2 && lanesLeftP >= 2 && (z.kind !== 'lane' || z.idx === 1) && !d.road.intersection && !d.road.driveways);
   const deferO = !!tempSpeed && two && !offsetOK && (method === 'merge' || method === 'shoulder' || method === 'roadside' || method === 'turnlane');
   let firstP = 0, firstO = 0;
-  let queue = null, shuttle = null, shuttleLimit = null, capacity = null, stepsUsed = [];
+  let queue = null, shuttle = null, shuttleLimit = null, capacity = null, stepsUsed = [], aheadUsed = false;
   const notes = [];
   const sched = { P: [], O: [], ped: [] };
   const workerSign = (v) => (nearTraffic(d) ? 'SPW' : 'SPEED') + v;
@@ -3070,6 +3075,29 @@ function layoutScheme(inp, job) {
       if (dPrep > 240) place('PREP', U(120));
       if (dPrep > 300) { const gap = at(RULES.rwaToPrep, Math.min(posted, target || posted)); for (let x = 120 + gap; x < dPrep - 20; x += gap) { place('PREP', U(x)); prepRep++; } }
       let uFirst = null;
+      // AGTTM Part 3 Table 5.6 recommends "80-40 AHEAD-40" and "100-80-40 AHEAD-40" as well as the step-by-step limits, and every
+      // Victorian set reviewed uses AHEAD (research/14: generic sets and sample 52), so it is the default; the AHEAD sign
+      // stands at least twice the limit (m) before the new limit (s5.5.1.3), here 2 x 1.25D or 2D: 100: ROADWORK AHEAD + 80, then ROADWORK AHEAD / 40 AHEAD, then PREPARE TO STOP + 40; 80 or 90:
+      // ROADWORK AHEAD / 40 AHEAD, then ROADWORK AHEAD + worker, then PREPARE TO STOP + 40
+      if ((state.prefs?.speedAhead ?? true) && steps.length > 1 && onFrame && posted >= 80) {
+        const last = steps[steps.length - 1], g = posted >= 100 ? 2 * D : Math.round((1.25 * D) / 5) * 5;
+        // the first ROADWORK AHEAD at least the Table 4.4 distance before PREPARE TO STOP, the AHEAD sign at least twice the
+        // limit it stands in (m) before the new limit (s5.5.1.3)
+        const total = Math.ceil(Math.max(2 * g, rwaGap) / 5) * 5;
+        place('SPEED' + last, U(dPrep), { reg: true, frame: 'fr' + X });
+        if (posted >= 100) {
+          const dA = Math.max(g, 2 * 80);
+          place('AHEAD' + last, U(dPrep + dA));
+          place('RWA', U(dPrep + Math.max(total, dA + D)), { frame: 'ra' + X });
+          place('SPEED80', U(dPrep + Math.max(total, dA + D)), { reg: true, frame: 'ra' + X });
+          aheadUsed = true;
+          return { uRwa: U(dPrep + Math.max(total, dA + D)), uFinal: U(dPrep) };
+        }
+        place('RWA', U(dPrep + Math.round(total / 10) * 5));
+        place('AHEAD' + last, U(dPrep + total));
+        aheadUsed = true;
+        return { uRwa: U(dPrep + total), uFinal: U(dPrep) };
+      }
       if (steps.length) {
         const last = steps[steps.length - 1];
         const uFinal = U(onFrame ? dPrep : dPrep + D);
@@ -3258,7 +3286,7 @@ function layoutScheme(inp, job) {
     let u = ts, uFinal = null;
     if (bikeIn) { u -= D; placeP('BIKE', u); } // merging-cyclist sign one sign spacing before the closure, as drawn TGSs place it (research/14 sample 05; Part 3 s3.10.2)
     if (steps.length) { u -= D; uFinal = u; placeP(workerSign(steps[steps.length - 1]), u, { reg: true }); }
-    else if (nearTraffic(d)) { u -= D; placeP('WKR', u); }
+    else if (wkrSep && nearTraffic(d)) { u -= D; placeP('WKR', u); }
     const firstStep = steps.length > 1 ? placeSteps(steps, uFinal, u - D, (c, uu) => placeP(c, uu, { reg: true })) : u;
     const rwaU = Math.min(firstStep, u) - D;
     placeP('RWA', rwaU);
@@ -3296,7 +3324,7 @@ function layoutScheme(inp, job) {
     const placeP = (code, u, extra = {}) => { sign(code, u, P, -u, 'before the work', P, extra); sched.P.push(code); };
     let u = ts, uFinal = null;
     if (steps.length) { u -= D; uFinal = u; placeP(workerSign(steps[steps.length - 1]), u, { reg: true }); }
-    else { u -= D; placeP('WKR', u); }
+    else if (wkrSep) { u -= D; placeP('WKR', u); }
     const firstStep = steps.length > 1 ? placeSteps(steps, uFinal, u - D, (c, uu) => placeP(c, uu, { reg: true })) : u;
     const rwaU = Math.min(firstStep, u) - D;
     placeP('RWA', rwaU);
@@ -3307,7 +3335,7 @@ function layoutScheme(inp, job) {
       const placeO = (code, uu, extra = {}) => { sign(code, uu, O, uu - L, 'before the work', O, extra); sched.O.push(code); };
       let uo = L + (useBuf ? buffer : 0), uoFinal = null;
       if (steps.length) { uo += D; uoFinal = uo; placeO(workerSign(steps[steps.length - 1]), uo, { reg: true }); }
-      else { uo += D; placeO('WKR', uo); }
+      else if (wkrSep) { uo += D; placeO('WKR', uo); }
       let firstStepO = uo;
       if (steps.length > 1) { let prev = uoFinal; for (let i = steps.length - 2; i >= 0; i--) { const u2 = Math.max(prev + (RULES.stepZone[steps[i]] || 200), uo + D); placeO('SPEED' + steps[i], u2, { reg: true }); prev = u2; firstStepO = u2; } }
       const rwaO = Math.max(firstStepO, uo) + D; placeO('RWA', rwaO); firstO = rwaO; uFinalO = uoFinal;
@@ -3444,11 +3472,11 @@ function layoutScheme(inp, job) {
     const placeO = (code, u, extra = {}) => { sign(code, u, O, u - L, 'before the work', O, extra); sched.O.push(code); };
     // P closes its left (kerb-side) lanes; O closes its right (inner) lane
     let uP = firstTaperU - D; placeP(nM ? 'LCL' : 'LSHIFT', uP);
-    uP -= D; placeP(tempSpeed ? workerSign(tempSpeed) : 'WKR', uP, tempSpeed ? { reg: true } : {}); const uPlim = uP; uFinalP = tempSpeed ? uP : null;
+    if (tempSpeed || wkrSep) { uP -= D; placeP(tempSpeed ? workerSign(tempSpeed) : 'WKR', uP, tempSpeed ? { reg: true } : {}); } const uPlim = uP; uFinalP = tempSpeed ? uP : null;
     if (steps.length > 1) uP = placeSteps(steps, uPlim, uP - D, (c, uu) => placeP(c, uu, { reg: true }));
     uP -= D; placeP('RWA', uP); firstP = uP;
     let uO = uOb + taper + D; placeO('RCL', uO, { frame: 'twO' }); placeO('TWOWAY', uO, { frame: 'twO' });
-    uO += D; placeO(tempSpeed ? workerSign(tempSpeed) : 'WKR', uO, tempSpeed ? { reg: true } : {}); const uOlim = uO; uFinalO = tempSpeed ? uO : null;
+    if (tempSpeed || wkrSep) { uO += D; placeO(tempSpeed ? workerSign(tempSpeed) : 'WKR', uO, tempSpeed ? { reg: true } : {}); } const uOlim = uO; uFinalO = tempSpeed ? uO : null;
     if (steps.length > 1) { let prev = uOlim; for (let i = steps.length - 2; i >= 0; i--) { const u2 = Math.max(prev + (RULES.stepZone[steps[i]] || 200), uO + D); placeO('SPEED' + steps[i], u2, { reg: true }); prev = u2; uO = u2; } }
     uO += D; placeO('RWA', uO); firstO = uO;
     shiftEnds = tempSpeed ? { endP: uOlim, endO: uPlim } : { endP: uOb + taper + at(RULES.endSpacing, posted), endO: uOa - Ts - at(RULES.endSpacing, posted) };
@@ -3490,7 +3518,7 @@ function layoutScheme(inp, job) {
     // ROADWORK AHEAD, steps, LANE SHIFT AHEAD, then workers + limit one spacing before the taper
     let u = firstTaperU;
     if (steps.length) { u -= D; uFinalP = u; placeP(workerSign(steps[steps.length - 1]), u, { reg: true }); }
-    else if (nearTraffic(d)) { u -= D; placeP('WKR', u); }
+    else if (wkrSep && nearTraffic(d)) { u -= D; placeP('WKR', u); }
     u -= D; placeP('LSHIFT', u);
     const firstStep = steps.length > 1 ? placeSteps(steps, uFinalP, u - D, (c, uu) => placeP(c, uu, { reg: true })) : u;
     const rwaU = Math.min(firstStep, u) - D; placeP('RWA', rwaU); firstP = rwaU;
@@ -3534,7 +3562,7 @@ function layoutScheme(inp, job) {
     let u = u0 - D; placeP(left ? 'TLCL' : 'TRCL', u);
     let uFinal = null;
     if (steps.length) { u -= D; uFinal = u; placeP(workerSign(steps[steps.length - 1]), u, { reg: true }); }
-    else if (nearTraffic(d)) { u -= D; placeP('WKR', u); }
+    else if (wkrSep && nearTraffic(d)) { u -= D; placeP('WKR', u); }
     const firstStep = steps.length > 1 ? placeSteps(steps, uFinal, u - D, (c, uu) => placeP(c, uu, { reg: true })) : u;
     const rwaU = Math.min(firstStep, u) - D; placeP('RWA', rwaU);
     firstP = rwaU; uFinalP = uFinal;
@@ -3828,7 +3856,7 @@ function layoutScheme(inp, job) {
     category, vals,
     speed: posted, approachSpeed: posted, tempSpeed, workSpeed, method, methodName: METHOD_NAMES[method][0], methodShort: METHOD_NAMES[method][1],
     D, taper, taperLabel, buffer, endTaper, laneLeft, laneLeftOK, laneMin: laneMinV, clr, hasArrow, pedRoute, pathWidth,
-    queue, shuttle, shuttleLimit, capacity, steps: stepsUsed, zoneLen, vph, hazardMarkers: items.filter((i) => i.t === 'hm').length,
+    queue, shuttle, shuttleLimit, capacity, steps: aheadUsed ? (posted >= 100 ? [80, stepsUsed[stepsUsed.length - 1]] : [stepsUsed[stepsUsed.length - 1]]) : stepsUsed, speedAhead: aheadUsed, zoneLen, vph, hazardMarkers: items.filter((i) => i.t === 'hm').length,
     speedSrc: 'From speed zone data: check the sign',
     refD: RULES.cite.spacing, refTaper: RULES.cite.taper, refBuffer: RULES.cite.buffer,
     work: { length: L }, items, extent, geo, notes, P, O, dirName, z,
@@ -4111,7 +4139,8 @@ function buildChecks(s, d, job) {
   });
   if (s.zones?.some((zz) => zz.len > RULES.tempSpeed.repeatMax)) add('repeat', 'todo', 'Repeat the speed signs', `Where a zone runs past ${RULES.tempSpeed.repeatMax} m, repeat the limit sign at least every ${RULES.tempSpeed.repeatMax} m, and after side roads.`, 'AGTTM Part 3 s5.5.1.3');
   if (s.offsetFixed) add('offset', 'pass', 'Both directions get the same limit', `Different limits for each direction aren't allowed on this road, so ${s.dirName(s.O)} traffic gets the ${s.tempSpeed} km/h limit over the same stretch, with its signs opposite the ${s.dirName(s.P)} signs.`, RULES.cite.offset);
-  if (s.steps.length > 1) add('steps', 'pass', `Speed steps down ${[v, ...s.steps].join(' → ')} km/h`, 'A step-down sequence from Table 5.6, with each zone long enough before the next.', RULES.cite.steps);
+  if (s.speedAhead) add('steps', 'pass', `Speed drops ${[v, ...s.steps].join(' → ')} km/h with a "${s.tempSpeed} AHEAD" sign`, `A Table 5.6 recommended application (${v >= 100 ? '100-80-40 AHEAD-40' : v + '-40 AHEAD-40'}). The AHEAD sign stands at least twice the limit in metres before the ${s.tempSpeed} sign (s5.5.1.3). Your company can switch to the step-by-step limits on the Company page.`, RULES.cite.steps);
+  else if (s.steps.length > 1) add('steps', 'pass', `Speed steps down ${[v, ...s.steps].join(' → ')} km/h`, 'A step-down sequence from Table 5.6, with each zone long enough before the next.', RULES.cite.steps);
   const stepKey = `${v}-${s.steps[s.steps.length - 1]}`;
   if (s.steps.length && RULES.stepsNotListed.includes(stepKey)) add('stepnotlisted', 'todo', `${v} to ${s.steps[s.steps.length - 1]} km/h isn't in Table 5.6`, 'Reductions must use a listed application. A single sign is the natural reading; record it as a departure or check with DTP.', RULES.cite.steps);
   add('endsign', 'todo', `END ROADWORK ${s.endGap} m past the last point affected`, `Table 3.2 gives ${at(RULES.endSpacing, v)} m at ${v} km/h${s.endGap > at(RULES.endSpacing, v) + 5 ? '; it is further out here so it lines up with the other direction\'s signs, which is the reason to record' : ''}. END ROADWORK never comes before the sign that restores the limit.`, RULES.cite.end, { confirmable: true, confirmLabel: 'Placement checked' });
@@ -8904,6 +8933,11 @@ function renderCompany() {
         <div class="chips">${[['spacing', 'Queue + one sign spacing'], ['agttm', 'Queue + sight distance (AGTTM)']].map(([v, l]) => `<button class="chip" type="button" data-pref-runin="${v}" aria-pressed="${(state.prefs.runIn || 'spacing') === v}">${l}</button>`).join('')}</div>
       </section>
       <section class="panel panel-pad stack">
+        <h3>Dropping to 40 on a fast road</h3>
+        <p class="muted" style="font-size:14.5px">AGTTM Table 5.6 allows either on an 80 to 100 km/h controller job: a "40 AHEAD" sign (ROADWORK AHEAD with 80 at 100 km/h, then ROADWORK AHEAD / 40 AHEAD, then PREPARE TO STOP with 40), which is what Victorian TGSs use, or a limit sign at each step (100, 80, 60, 40).</p>
+        <div class="chips">${[['ahead', '40 AHEAD sign'], ['steps', 'A limit sign at each step']].map(([v, l]) => `<button class="chip" type="button" data-pref-ahead="${v}" aria-pressed="${((state.prefs.speedAhead ?? true) ? 'ahead' : 'steps') === v}">${l}</button>`).join('')}</div>
+      </section>
+      <section class="panel panel-pad stack">
         <h3>The speed limit on a lane closure</h3>
         <p class="muted" style="font-size:14.5px">Usual practice puts the limit before the lane status sign (LEFT LANE CLOSED / MERGE RIGHT), so drivers slow before they merge. On multi-lane roads AGTTM also allows an offset zone that starts the limit at the buffer, past the taper.</p>
         <div class="chips">${[['before', 'Limit before the merge'], ['offset', 'Offset zone at the buffer']].map(([v, l]) => `<button class="chip" type="button" data-pref-offset="${v}" aria-pressed="${(state.prefs.offsetLimit ? 'offset' : 'before') === v}">${l}</button>`).join('')}</div>
@@ -8965,6 +8999,7 @@ document.addEventListener('click', (e) => {
   if (ds.ticket) { const [pid, i] = ds.ticket.split(':'); showTicket(pid, +i); return; }
   if (ds.ticketPerson) { state.ticketPerson = ds.ticketPerson; render(); return; }
   if (ds.planView) { state.planView = ds.planView; render(); return; }
+  if (ds.prefAhead) { state.prefs.speedAhead = ds.prefAhead === 'ahead'; save(); render(); toast(state.prefs.speedAhead ? 'Fast-road controller jobs warn 40 AHEAD' : 'Fast-road controller jobs use the AGTTM steps'); return; }
   if (ds.prefRunin) { state.prefs.runIn = ds.prefRunin; save(); render(); toast(ds.prefRunin === 'agttm' ? 'PREPARE TO STOP at the sight distance to the end of the queue' : 'PREPARE TO STOP one sign spacing back from the queue'); return; }
   if (ds.prefOffset) { state.prefs.offsetLimit = ds.prefOffset === 'offset'; save(); render(); toast(state.prefs.offsetLimit ? 'Multi-lane closures start the limit at the buffer' : 'The limit comes before the merge'); return; }
   if (ds.prefFrames) { state.prefs.frames = ds.prefFrames; save(); render(); toast(ds.prefFrames === 'combined' ? 'New TGSs use combined frames' : 'New TGSs put each sign on its own stand'); return; }
