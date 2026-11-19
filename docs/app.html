@@ -1824,7 +1824,9 @@ const RULES = {
   heavyShare: { low: 0.05, med: 0.1, high: 0.2 },
   // Part 3 s3.10.1 (p39 to 40): 1.8 m path; people on the road need a fence 1.2 m from traffic or 40 km/h, and a barrier from 70 km/h.
   // The 1.0 m pinch point is a Queensland figure (S)
-  ped: { desirable: 1.8, absolute: 1.0, fenceToLane: 1.2, barrierFrom: 70, slowTo: 40 },
+  // pedestrian path: 1.8 m desirable (AGTTM Part 3 s3.10.1); 1.2 m the least any Victorian TGS reviewed keeps open
+  // (research/14 footpath.json: 1.2 m minimum, 1.5 m on curves); below that, the footpath closes with a route instead
+  ped: { desirable: 1.8, absolute: 1.2, fenceToLane: 1.2, barrierFrom: 70, slowTo: 40 },
   arrowBoardFrom: 60, // Part 3 s5.8 (p75): in the additional warning area, outside the buffer
   // Part 3 s5.8.1 (p75 to 76): should on Category 3; may be considered on Category 2 at 80 km/h or more; otherwise by risk
   // assessment. At least 40 m clear in front of the TMA (Part 3, Part 4 s3.5.3.1, Part 5 s4.1.2)
@@ -4240,7 +4242,11 @@ function buildChecks(s, d, job) {
   if (tiw) add('tiw', 'warn', 'Likely to be traffic impact works', `${peak ? 'Weekday peak-hour works' : d.road.signals ? 'A lane closure near traffic signals' : 'Works that can delay buses or trams'} on an arterial road count as traffic impact works under the regulations in force from 13 June 2026. Consent, fees and extra content apply, so allow time.`, 'Road Management (Works and Infrastructure) Regulations, from 13 June 2026');
   add('consent', 'warn', d.site.authority === 'dtp' ? 'Consent for works from DTP' : `Consent for works from ${d.site.lga}`, d.site.authority === 'dtp' ? 'This is an arterial road. Works in the road reserve need the coordinating road authority\'s written consent before the TGS is used.' : 'This is a municipal road. Apply to the council for consent (often called a works permit) and attach this TGS.', RULES.cite.consent);
   if (d.road.bus) add('bus', 'warn', 'Tell the bus operator', 'A bus route runs past the site. Send the operator the dates and the TGS, and check the stop stays usable or is moved.', '');
-  if (d.road.tram) add('tram', 'warn', 'Yarra Trams approval', 'Yarra Trams must approve the TMP for works on tram roads or within 20 m of a tram stop. Allow at least 6 weeks.', 'Yarra Trams access requirements');
+  if (d.road.tram) {
+    // Melbourne's network is Yarra Trams; Bendigo and Ballarat trams are run by their own operators (heritage tramways)
+    const metro = (d.site.lat ?? -37.8) < -37.55 && (d.site.lat ?? -37.8) > -38.2 && (d.site.lng ?? 145) > 144.7 && (d.site.lng ?? 145) < 145.3;
+    add('tram', 'warn', metro ? 'Yarra Trams approval' : 'Tram operator approval', metro ? 'Yarra Trams must approve the TMP for works on tram roads or within 20 m of a tram stop. Allow at least 6 weeks.' : 'The tram operator (in Bendigo and Ballarat, the city\'s tramway) and the road manager must approve the TMP for works on or beside the tracks: agree tram running, stops and any track occupation before the works.', metro ? 'Yarra Trams access requirements' : 'Tram operator access requirements');
+  }
   if (s.method === 'grading' && s.grade) {
     const aadt = d.site.aadt || 0;
     add('grade-volume', aadt > 3000 ? 'fail' : 'pass', `Traffic ${aadt ? `about ${aadt} vehicles a day` : 'volume'}: ${aadt > 3000 ? 'over' : 'within'} the 3,000 a day limit`, aadt > 3000 ? 'Grading as constantly moving work is for roads carrying 3,000 vehicles a day or less. Above that, work it as a convoy with a shadow vehicle, or as static sites.' : 'Grading as constantly moving work suits roads carrying 3,000 vehicles a day or less.', 'AGTTM Part 5 s4.5');
