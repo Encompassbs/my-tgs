@@ -2994,6 +2994,18 @@ function layoutScheme(inp, job) {
   const workerSign = (v) => (nearTraffic(d) ? 'SPW' : 'SPEED') + v;
   // upstream step-downs before a final limit sign at uFinal (Table 5.6); returns the chainage of the first one
   const placeSteps = (steps, uFinal, uLimit, placeFn) => {
+    // 80 to 100 km/h down to the work limit: "40 AHEAD" (Table 5.6 "80-40 AHEAD-40", "100-80-40 AHEAD-40"), the AHEAD sign at
+    // least twice the limit it stands in (m) before the new limit (s5.5.1.3); at 100 the 80 zone keeps its Table 5.5 length.
+    // As the 80 to 100 km/h lane and shoulder closures in the generic sets draw it.
+    const last = steps[steps.length - 1];
+    if ((state.prefs?.speedAhead ?? true) && steps.length > 1 && posted >= 80 && last === tempSpeed && SIGNS['AHEAD' + last]) {
+      const inZone = steps.length > 2 ? steps[0] : posted;
+      const uA = Math.min(uLimit, uFinal - Math.max(2 * inZone, 2 * D));
+      placeFn('AHEAD' + last, uA);
+      aheadUsed = true;
+      if (steps.length > 2) { const u8 = Math.min(uA - D, uFinal - (RULES.stepZone[steps[0]] || 200)); placeFn('SPEED' + steps[0], u8); return u8; }
+      return uA;
+    }
     let prev = uFinal;
     for (let i = steps.length - 2; i >= 0; i--) {
       const u = Math.min(uLimit, prev - (RULES.stepZone[steps[i]] || 200));
@@ -3844,6 +3856,16 @@ function layoutScheme(inp, job) {
     const sd = z.side || z.dir || P, yF = vergeY(sd);
     items.push({ t: 'tc', id: 'tcf1', s: S(-2), y: yF, side: sd, label: 'TC 1', foot: true }, { t: 'tc', id: 'tcf2', s: S(L + 2), y: yF, side: sd, label: 'TC 2', foot: true });
     notes.push('TC 1 and TC 2 stand on the footpath at either end of the work: they hold people while trucks cross the footpath and stop traffic briefly when a truck turns in or out. They do not run a shuttle.');
+  }
+  // trucks crossing an open footpath: PEDESTRIANS WATCH YOUR STEP on the footpath either side of the site entry, as the
+  // loading and truck-access generic plans sign it (research/14 samples 08, 09)
+  if ((d.work.access || hasType(d, 'delivery')) && !items.some((i) => i.t === 'sign' && i.ped)) {
+    const sd = z.side || z.dir || P, fp = zs.find((x) => x.kind === 'foot' && x.side === sd);
+    if (fp) {
+      sign('PEDWATCH', -6, sd, 6, 'before the site entry', P, { ped: true });
+      sign('PEDWATCH', L + 6, sd, 6, 'past the site entry', P, { ped: true });
+      sched.ped.push('PEDWATCH', 'PEDWATCH');
+    }
   }
   if (hasType(d, 'delivery')) notes.push('Loads cross the footpath only with a spotter holding people back; a crane or forklift lift over the path closes it for the lift. Doors and tailgates on the traffic side stay inside the work area.');
 
