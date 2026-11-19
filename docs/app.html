@@ -8227,6 +8227,29 @@ function statusBar(job, s) {
   return `<div class="status-bar ${M[0]}"><span class="sb-ico">${ic(M[1])}</span><span><b>${M[2]}</b><small>${M[3]}</small></span><div class="sb-actions">${M[4]}</div></div>`;
 }
 
+/* The job on the real map (realmap.html, built next to app.html): the A3 sheets on the aerial photo, with the job's road,
+   work zone, method, speed and the company's settings handed over in the address. The map page works out the rest
+   (junctions, side roads, property lines) from Vicmap. */
+function realmapHref(job) {
+  const d = job.input, r = d.road, w = d.work, p = state.prefs || {};
+  const zones = w.zones?.length ? w.zones : [w.zone].filter(Boolean);
+  const layout = r.layout === '2L2W' ? '2L2W' : `${r.layout}:${r.lanesEach || 2}`;
+  const lanes = zones.filter((z) => /^lane/.test(z));
+  const inner = (X) => `lane${X}${r.lanesEach || 2}`;
+  const centre = r.layout !== '2L2W' && r.layout !== '1W' && lanes.includes(inner('A')) && lanes.includes(inner('B'));
+  const t = (w.types || [])[0];
+  const workType = ['lift', 'tree'].includes(t) ? 'lift' : ['lines', 'mowing', 'survey', 'grading'].includes(t) ? t : 'dig';
+  const job2 = {
+    site: { lat: d.site.lat, lng: d.site.lng, street: d.site.street, label: [addrLine(d), d.site.suburb].filter(Boolean).join(', ') },
+    speed: d.site.speed, aadt: d.site.aadt || null, count5: r.count5 ?? null, layout, parking: !!r.parking, bike: !!r.bike, unsealed: !!r.unsealed,
+    zone: centre ? 'centre' : zones[0], alsoKerb: !centre && zones.length > 1, len: w.length || 20, workType,
+    method: d.control.method, onFoot: !!w.mobile?.onFoot, mobSight: !!w.mobile?.sightOK, access: !!w.access, vms: !!d.control.vms,
+    acState: w.multiDay ? (w.overnight?.state && w.overnight.state !== 'auto' ? w.overnight.state : 'auto') : 'none',
+    spacingPref: typeof p.spacing === 'string' ? p.spacing : 'table', framesPref: p.frames || 'combined', speedPref: p.speedAhead === false ? 'steps' : 'ahead',
+    prefs: { spacing: p.spacing, frames: p.frames, runIn: p.runIn, offsetLimit: p.offsetLimit, speedAhead: p.speedAhead, workerSign: p.workerSign, queueMin: p.queueMin },
+  };
+  return 'realmap.html?job=' + encodeURIComponent(JSON.stringify(job2));
+}
 function tabPlan(job, s) {
   const orient = state.orient;
   // the aftercare TGS, drawn from this one, behind a switch
@@ -8269,7 +8292,7 @@ function tabPlan(job, s) {
   <div class="plan-grid">
     <section class="diagram panel">
       <div class="diagram-top"><span class="label">Plan view · distances to scale in metres · widths stretched</span>
-        ${viewSwitch}<button class="btn btn-sm" type="button" data-act="print">${ic('file')}A3 layout</button></div>
+        ${viewSwitch}<button class="btn btn-sm" type="button" data-act="print">${ic('file')}A3 layout</button>${job.input.site.lat ? `<a class="btn btn-sm" href="${esc(realmapHref(job))}" target="_blank" rel="noopener">${ic('pin')}On the real map</a>` : ''}</div>
       <div class="diagram-scroll" id="dgWrap">${schemeSVG(s, { orient })}</div>
       <div class="legend"><span class="label">Key</span><div class="legend-items">${legendHTML(s)}</div></div>
     </section>
