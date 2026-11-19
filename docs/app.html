@@ -1952,6 +1952,7 @@ const SIGNS = {
   FENCE: { code: '', name: 'Pedestrian fence', shape: 'fence' },
   TMA: { code: '', name: 'Truck mounted attenuator', shape: 'tma' },
 };
+SIGNS.RPANEXT2 = { code: '', name: 'Road plant ahead, next 2 km', pair: [{ bg: FLUORO, symbol: 'worker' }, { bg: '#FFD200', lines: ['ROAD PLANT', 'AHEAD', 'NEXT 2 km'] }] };
 // ROADWORK AHEAD with "40 AHEAD" (company option for 80 to 100 km/h shuttles)
 [40, 50, 60].forEach((v) => { SIGNS['AHEAD' + v] = { code: '', name: `Roadwork ahead, ${v} ahead`, pair: [{ bg: '#FFD200', lines: ['ROADWORK', 'AHEAD'] }, { bg: '#FFD200', lines: [`${v}`, 'AHEAD'] }] }; });
 [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].forEach((k) => { SIGNS['RWNEXT' + k] = { code: '', name: `Roadwork next ${k} km`, shape: 'rect', lines: ['ROADWORK', `NEXT ${k} km`] }; });
@@ -3582,7 +3583,31 @@ function layoutScheme(inp, job) {
      Every sign and device rides on the vehicles. Work vehicle(s) at the front of the protected length, the shadow
      vehicle 40 m behind (with a TMA where required), an advance warning vehicle a Table 3.1 gap behind that, and on
      two-way roads a lead vehicle a Table 3.1 gap ahead. The drawing is a snapshot of the convoy on a straight length. */
-  if (method === 'mobile') {
+  /* --- Mobile works on the shoulder with good sight distance (AGTTM Part 4 s3.7.3.1; Part 5 s4.5.3 WL-CM): the work
+     vehicle's warning device (bar or four corners), ROAD PLANT AHEAD / NEXT 2 km before each end of the section, moved as
+     the work moves (no more than 2 km between them), and no termination signs. Where drivers can't see the vehicle from
+     150 m (60 km/h or less) or 250 m, or anyone works on foot, it is a convoy (below). Matches the generic mowing sheets. --- */
+  const mobSingle = method === 'mobile' && z.kind !== 'lane' && !(d.work.mobile || {}).onFoot && !!(d.work.mobile || {}).sightOK;
+  if (mobSingle) {
+    const mo = d.work.mobile || {}, vWork = +mo.speed || 10, lines = hasType(d, 'lines');
+    const road = zs.filter((x) => x.kind !== 'foot'), kerbP = P === 'A' ? road[0].y0 : road[road.length - 1].y1;
+    const yW = (z.y0 + z.y1) / 2 || kerbP;
+    items.push({ t: 'vehicle', id: 'veh' + id++, role: 'work', s: S(0), y: yW, dir: P, label: 'WORK VEHICLE', arrow: 'bar' });
+    items.push({ t: 'arrowboard', id: 'abw0', s: S(-3), y: yW, dir: P, mode: 'bar' });
+    const dAdv = Math.max(D, posted <= 60 ? 150 : 250);
+    sign('RPANEXT2', -dAdv, P, dAdv, 'before the section', P);
+    if (two) sign('RPANEXT2', L + dAdv, O, dAdv, 'before the section', O);
+    firstP = -dAdv; firstO = two ? L + dAdv : L; taper = 0; buffer = 0;
+    vals.buffer = { v: 0, c: 'A', sp: posted, label: 'No buffer: one vehicle on the shoulder' };
+    laneLeft = r1(lw); laneLeftOK = true; shiftEnds = { endP: 0, endO: 0 };
+    mobileInfo = { cls: posted - vWork <= RULES.mobile.classBand ? 1 : 2, onFoot: false, vWork, nWork: 1, gapM: null, tma: false, awv: false, lead: false, zone40: null, arrowMode: 'bar', lines, single: true };
+    notes.push(
+      `Shoulder work with good sight distance: one work vehicle with its warning device on bar or four corners, ROAD PLANT AHEAD / NEXT 2 km about ${dAdv} m before each end of the section (AGTTM Part 4 s3.7.3.1; Part 5 s4.5.3). Move the signs as the work moves; never more than 2 km between them. No END signs.`,
+      `Drivers must see the warning device from ${posted <= 60 ? 150 : 250} m all along the section. Where a crest, bend or vegetation cuts that short, it becomes a convoy with a shadow and advance warning vehicle, or a static site.`,
+      'Stay on the shoulder: no lane encroachment at 60 km/h or less, 1.2 m clear of the lane up to 80 km/h, 3 m above (shoulder works criteria). Fold or cover the signs when the work stops.',
+    );
+  }
+  if (method === 'mobile' && !mobSingle) {
     const mo = d.work.mobile || {};
     const onFoot = !!mo.onFoot, vWork = +mo.speed || 10, nWork = Math.max(1, Math.min(4, +mo.vehicles || 1));
     const lines = hasType(d, 'lines');
@@ -3955,11 +3980,19 @@ function buildAftercare(s, d) {
       const frame = 'af' + X;
       if (code) sign(code, before(X, x), X, X, x, 'before the hazard', V ? { frame, dup: true } : {}); // a frame goes up as one, both sides
       if (V) sign('SPEED' + V, before(X, x), X, X, x, 'before the hazard', { reg: true, frame });
-      for (let i = steps.length - 2; i >= 0; i--) { x += RULES.stepZone[steps[i]] || 200; sign('SPEED' + steps[i], before(X, x), X, X, x, 'before the hazard', { reg: true }); }
-      x += D;
-      sign('RWA', before(X, x), X, X, x, 'before the hazard');
-      // repeaters through a long treated length (practice: every 200 m)
-      for (let r = 200; V && r < L - 20; r += 200) sign('SPEED' + V, X === 'A' ? r : L - r, X, X, r, 'into the treated length', { reg: true });
+      const ahead = (state.prefs?.speedAhead ?? true) && steps.length > 1 && SIGNS['AHEAD' + V];
+      if (ahead) {
+        // ROADWORK AHEAD with "60 AHEAD" on one frame, at least twice the limit (m) before the 60 (Table 5.6 "100-60 AHEAD-60";
+        // s5.5.1.3), as the overnight loose-stone plans draw it
+        x += Math.max(D, 2 * v);
+        sign('AHEAD' + V, before(X, x), X, X, x, 'before the hazard', { dup: true });
+      } else {
+        for (let i = steps.length - 2; i >= 0; i--) { x += RULES.stepZone[steps[i]] || 200; sign('SPEED' + steps[i], before(X, x), X, X, x, 'before the hazard', { reg: true }); }
+        x += D;
+        sign('RWA', before(X, x), X, X, x, 'before the hazard');
+      }
+      // repeaters through a long treated length: the limit with the hazard sign (practice: every 200 to 500 m)
+      for (let r = 200; V && r < L - 20; r += 200) { const fr = 'afr' + X + r; sign('SPEED' + V, X === 'A' ? r : L - r, X, X, r, 'into the treated length', { reg: true, frame: fr }); if (code) sign(code, X === 'A' ? r : L - r, X, X, r, 'into the treated length', { frame: fr }); }
       // END ROADWORK: on the back of the other direction's hazard frame where there is one, else one spacing past
       if (two && V) sign('END' + v, before(O, D), O, X, D, 'past the hazard', { end: true, frame: 'af' + O, back: true });
       else sign(V ? 'END' + v : 'END', X === 'A' ? L + D : -D, X, X, D, 'past the hazard', { end: true });
@@ -4193,7 +4226,10 @@ function buildChecks(s, d, job) {
     add('grade-sections', 'todo', 'Sections of 10 km or less', 'ROADWORK NEXT x km at each end of each section, no more than 10 km long; 2 km sub-sections where sight is short (up to 6 km to reach a turning point). Signs move as each section is finished.', 'AGTTM Part 4 s3.8.13.2', { confirmable: true, confirmLabel: 'Planned' });
     if (d.road.unsealed !== true) add('grade-sealed', 'fail', 'Only for roads that are normally unsealed', 'A sealed road that is temporarily unsealed (construction, weather) is a static site, not grading.', 'AGTTM Part 4 s3.8.13.2');
   }
-  if (s.method === 'mobile' && s.mobile) {
+  if (s.method === 'mobile' && s.mobile?.single) {
+    add('mob-single', 'todo', `Drivers see the work vehicle from ${v <= 60 ? 150 : 250} m all along the section`, 'One vehicle on the shoulder with ROAD PLANT AHEAD / NEXT 2 km is only for good sight distance. Drive the section first; where sight is short, run it as a convoy (untick "Good sight distance") or a static site.', 'AGTTM Part 4 s3.7.3.1; Part 5 s4.5.3', { confirmable: true, confirmLabel: 'Checked on the drive-through' });
+    add('mob-clear', 'todo', 'Clear of the traffic lane', `No lane encroachment at 60 km/h or less, 1.2 m clear up to 80 km/h, 3 m above.`, 'AGTTM Part 5 Table 5.1 (shoulder works criteria, as printed on the generic sheets)');
+  } else if (s.method === 'mobile' && s.mobile) {
     const m = s.mobile, cat = s.category.cat;
     add('mob-shadow', 'pass', `Shadow vehicle ${RULES.mobile.shadowToWork} m behind the work vehicle`, `Class ${m.cls}: no shadow vehicle, no convoy. It stays ${RULES.mobile.shadowToWork} m behind the work vehicle or the nearest worker; too close and it can be pushed into the work, too far and traffic cuts in.`, 'AGTTM Part 4 s3.5.3');
     add('mob-tma', cat >= 3 && !m.tma ? 'fail' : m.tma ? 'pass' : 'todo', m.tma ? 'TMA on the shadow vehicle' : 'TMA on the shadow vehicle: consider', m.tma ? `${cat >= 3 ? 'Required on a Category 3 road' : cat === 2 && v >= 80 ? 'Should be fitted on a Category 2 road at 80 km/h or more' : 'Chosen for this job'}. Keep at least 40 m clear in front; the driver stays in the cab in a harness.` : 'Not required here; fit one if the risk assessment points to it (the 2025 industry guidelines recommend it as the default on Category 2).', 'AGTTM Part 4 s3.5.3, s3.5.3.1');
@@ -7847,7 +7883,7 @@ function stepControl(d) {
     <div class="toggles">
       ${toggleBtn('control.tma', c.tma, 'Truck mounted attenuator', gear('tma', 'Crash cushion truck behind the work'), 'truck')}
       ${c.method === 'grading' ? `<div class="field"><span class="label">The grading section</span><div class="toggles">${toggleBtn('work.grade.windrow', d.work.grade?.windrow, 'Windrow left in the lane', 'GRADER AHEAD 100 m before it', 'road')}${toggleBtn('work.grade.clearSight', d.work.grade?.clearSight, 'Grader seen from 250 m everywhere', 'Then no advance signs are needed (confirm on site)', 'eye')}</div>${chipSet('work.grade.km', d.work.grade?.km || 2, [[2, '2 km'], [5, '5 km'], [10, '10 km']])}<p class="muted" style="font-size:13px">Section length: 10 km at most, 2 km sub-sections where sight is short.</p></div>` : ''}
-      ${c.method === 'mobile' ? `<div class="field"><span class="label">The convoy</span><div class="toggles">${toggleBtn('work.mobile.onFoot', d.work.mobile?.onFoot, 'Workers on foot', 'In the lane or within 1.2 m: a 40 km/h mobile zone applies (AGTTM Part 4 s3.8.4)', 'walk')}</div>${chipSet('work.mobile.speed', d.work.mobile?.speed || 10, [[5, '5 km/h'], [10, '10 km/h'], [20, '20 km/h'], [40, '40 km/h']])}<p class="muted" style="font-size:13px">Work vehicle speed. Within 20 km/h of the limit it is Class 1: no convoy needed.</p>${chipSet('work.mobile.vehicles', d.work.mobile?.vehicles || 1, [[1, '1 work vehicle'], [2, '2'], [3, '3']])}</div>` : ''}
+      ${c.method === 'mobile' ? `<div class="field"><span class="label">The convoy</span><div class="toggles">${toggleBtn('work.mobile.onFoot', d.work.mobile?.onFoot, 'Workers on foot', 'In the lane or within 1.2 m: a 40 km/h mobile zone applies (AGTTM Part 4 s3.8.4)', 'walk')}${toggleBtn('work.mobile.sightOK', d.work.mobile?.sightOK, 'On the shoulder, good sight distance', 'Drivers see the work vehicle from 250 m (150 m at 60 km/h or less): one vehicle and ROAD PLANT AHEAD / NEXT 2 km, no convoy (AGTTM Part 4 s3.7.3.1)', 'eye')}</div>${chipSet('work.mobile.speed', d.work.mobile?.speed || 10, [[5, '5 km/h'], [10, '10 km/h'], [20, '20 km/h'], [40, '40 km/h']])}<p class="muted" style="font-size:13px">Work vehicle speed. Within 20 km/h of the limit it is Class 1: no convoy needed.</p>${chipSet('work.mobile.vehicles', d.work.mobile?.vehicles || 1, [[1, '1 work vehicle'], [2, '2'], [3, '3']])}</div>` : ''}
       ${d.site.speed >= 80 && (d.road.layout === 'DIV' || d.road.layout === '4L2W' || d.road.layout === '1W') ? toggleBtn('control.chicane', c.chicane, 'Chicane for right-lane works', 'Close the left lane first, then shift traffic back left past the work, instead of a right-to-left merge at speed (AGTTM Part 3 s5.9.2)', 'road') : ''}
       ${toggleBtn('control.arrow', c.arrow, 'Arrow board', gear('arrow', 'Flashing arrow for lane closures'), 'right')}
       ${toggleBtn('control.vms', c.vms, 'Message board (VMS)', gear('vms', 'Advance notice to drivers'), 'info')}
