@@ -1954,6 +1954,7 @@ const SIGNS = {
   FENCE: { code: '', name: 'Pedestrian fence', shape: 'fence' },
   TMA: { code: '', name: 'Truck mounted attenuator', shape: 'tma' },
 };
+SIGNS.VMS = { code: '', name: 'VMS board: ROADWORK AHEAD / EXPECT DELAYS', shape: 'rect', bg: '#15181C', fg: '#FFC400', lines: ['ROADWORK AHEAD', 'EXPECT DELAYS'] };
 SIGNS.RPANEXT2 = { code: '', name: 'Road plant ahead, next 2 km', pair: [{ bg: FLUORO, symbol: 'worker' }, { bg: '#FFD200', lines: ['ROAD PLANT', 'AHEAD', 'NEXT 2 km'] }] };
 // ROADWORK AHEAD with "40 AHEAD" (company option for 80 to 100 km/h shuttles)
 [40, 50, 60].forEach((v) => { SIGNS['AHEAD' + v] = { code: '', name: `Roadwork ahead, ${v} ahead`, pair: [{ bg: '#FFD200', lines: ['ROADWORK', 'AHEAD'] }, { bg: '#FFD200', lines: [`${v}`, 'AHEAD'] }] }; });
@@ -2397,10 +2398,16 @@ function crossSection(d) {
   if (r.parking) z.push({ id: 'parkW', kind: 'park', side: 'A', w: 2.3, label: `Parking lane, ${A} side`, short: 'Parking' });
   if (r.bike) z.push({ id: 'bikeW', kind: 'bike', side: 'A', w: 1.5, label: `Bike lane, ${A} side`, short: 'Bike' });
   const turnStrip = r.turn && r.layout !== '1W' ? { id: 'turnA', kind: 'turn', dir: 'A', side: 'A', turn: r.turn, w: lw, label: `${cap(A)} ${r.turn}-turn lane`, short: r.turn === 'left' ? 'Turn ↰' : 'Turn ↱' } : null;
-  if (turnStrip && r.turn === 'left') z.push(turnStrip);
+  // two turn lanes (r.turnLanes 2): the second sits between the first and the through lanes; closing one leaves the other
+  // open, so the turn isn't banned (the dual turn-lane TGS sets, research/14 turnlane.json)
+  const turnStrips = !turnStrip ? [] : r.turnLanes === 2
+    ? [turnStrip, { ...turnStrip, id: 'turnA2', label: `${cap(A)} ${r.turn}-turn lane 2`, second: true }].map((t, i) => (i === 0 ? { ...t, label: `${cap(A)} ${r.turn}-turn lane 1` } : t))
+    : [turnStrip];
+  if (r.turn === 'right') turnStrips.reverse(); // lane 1 stays against the median or centre
+  if (turnStrip && r.turn === 'left') z.push(...turnStrips);
   if (r.layout === '2L2W') {
     z.push({ id: 'laneA', kind: 'lane', dir: 'A', side: 'A', idx: 1, of: 1, w: lw, label: `${cap(A)} lane`, short: 'Lane ↑' });
-    if (turnStrip && r.turn === 'right') z.push(turnStrip);
+    if (turnStrip && r.turn === 'right') z.push(...turnStrips);
     z.push({ id: 'laneB', kind: 'lane', dir: 'B', side: 'B', idx: 1, of: 1, w: lw, label: `${cap(B)} lane`, short: 'Lane ↓', inner: true });
     z.find((x) => x.id === 'laneA').inner = true;
   } else if (one) {
@@ -2408,7 +2415,7 @@ function crossSection(d) {
   } else {
     const inner = r.layout === 'DIV' ? 'median' : 'centre';
     for (let i = 1; i <= n; i++) z.push({ id: 'laneA' + i, kind: 'lane', dir: 'A', side: 'A', idx: i, of: n, w: lw, inner: i === n, label: i === 1 ? `${cap(A)} kerb lane` : i === n ? `${cap(A)} ${inner} lane` : `${cap(A)} middle lane`, short: i === 1 ? 'Kerb ↑' : i === n ? (inner === 'median' ? 'Median ↑' : 'Centre ↑') : 'Mid ↑' });
-    if (turnStrip && r.turn === 'right') z.push(turnStrip);
+    if (turnStrip && r.turn === 'right') z.push(...turnStrips);
     if (r.layout === 'DIV') z.push({ id: 'median', kind: 'median', w: 2.0, label: 'Median', short: '' });
     for (let i = n; i >= 1; i--) z.push({ id: 'laneB' + i, kind: 'lane', dir: 'B', side: 'B', idx: i, of: n, w: lw, inner: i === n, label: i === 1 ? `${cap(B)} kerb lane` : i === n ? `${cap(B)} ${inner} lane` : `${cap(B)} middle lane`, short: i === 1 ? 'Kerb ↓' : i === n ? (inner === 'median' ? 'Median ↓' : 'Centre ↓') : 'Mid ↓' });
   }
@@ -3000,7 +3007,7 @@ function layoutScheme(inp, job) {
     // least twice the limit it stands in (m) before the new limit (s5.5.1.3); at 100 the 80 zone keeps its Table 5.5 length.
     // As the 80 to 100 km/h lane and shoulder closures in the generic sets draw it.
     const last = steps[steps.length - 1];
-    if ((state.prefs?.speedAhead ?? true) && steps.length > 1 && posted >= 80 && last === tempSpeed && SIGNS['AHEAD' + last]) {
+    if ((state.prefs?.speedAhead ?? true) && steps.length > 1 && posted >= 80 && posted <= 100 && last === tempSpeed && SIGNS['AHEAD' + last]) {
       const inZone = steps.length > 2 ? steps[0] : posted;
       const uA = Math.min(uLimit, uFinal - Math.max(2 * inZone, 2 * D));
       placeFn('AHEAD' + last, uA);
@@ -3094,7 +3101,7 @@ function layoutScheme(inp, job) {
       // Victorian set reviewed uses AHEAD (research/14: generic sets and sample 52), so it is the default; the AHEAD sign
       // stands at least twice the limit (m) before the new limit (s5.5.1.3), here 2 x 1.25D or 2D: 100: ROADWORK AHEAD + 80, then ROADWORK AHEAD / 40 AHEAD, then PREPARE TO STOP + 40; 80 or 90:
       // ROADWORK AHEAD / 40 AHEAD, then ROADWORK AHEAD + worker, then PREPARE TO STOP + 40
-      if ((state.prefs?.speedAhead ?? true) && steps.length > 1 && onFrame && posted >= 80) {
+      if ((state.prefs?.speedAhead ?? true) && steps.length > 1 && onFrame && posted >= 80 && posted <= 100) { // 110 km/h freeways step down 80, 60, 40 (research/14 samples 12, 13)
         const last = steps[steps.length - 1], g = posted >= 100 ? 2 * D : Math.round((1.25 * D) / 5) * 5;
         // the first ROADWORK AHEAD at least the Table 4.4 distance before PREPARE TO STOP, the AHEAD sign at least twice the
         // limit it stands in (m) before the new limit (s5.5.1.3)
@@ -3573,7 +3580,9 @@ function layoutScheme(inp, job) {
     const steps = speedSteps(posted, tempSpeed);
     stepsUsed = steps;
     const placeP = (code, u, extra = {}) => { sign(code, u, P, -u, 'before the work', P, extra); sched.P.push(code); };
-    placeP(left ? 'NOLEFT' : 'NORIGHT', u0, { ban: true });
+    const dualTurn = d.road.turnLanes === 2;
+    if (!dualTurn) placeP(left ? 'NOLEFT' : 'NORIGHT', u0, { ban: true }); // with two turn lanes the other one stays open: no ban
+    else notes.push(`The other ${left ? 'left' : 'right'}-turn lane stays open, so the turn isn't banned: turning traffic uses it (lane status sign with the open lane's arrow).`);
     let u = u0 - D; placeP(left ? 'TLCL' : 'TRCL', u);
     let uFinal = null;
     if (steps.length) { u -= D; uFinal = u; placeP(workerSign(steps[steps.length - 1]), u, { reg: true }); }
@@ -3837,6 +3846,13 @@ function layoutScheme(inp, job) {
   // on combined frames, END ROADWORK goes on the back of the other direction's PREPARE TO STOP frame (both sides of the road)
   const backP = combined && through && uFinalO != null && Math.abs(endP - uFinalO) < 0.5;
   const backO = combined && through && uFinalP != null && Math.abs(endO - uFinalP) < 0.5;
+  // VMS board on each approach (company or job option; rural highway practice, research/14 sample 29): before the first sign,
+  // at least one sign spacing and 200 m out, with ROADWORK AHEAD / EXPECT DELAYS
+  if (d.control.vms && method !== 'mobile' && method !== 'grading') {
+    const g = Math.max(D, 200);
+    if (firstP != null) { sign('VMS', firstP - g, P, -(firstP - g), 'before the first sign', P); sched.P.push('VMS'); }
+    if (firstO != null && (two || divided)) { sign('VMS', firstO + g, O, firstO + g - L, 'before the first sign', O); sched.O.push('VMS'); }
+  }
   if (sched.P.length) sign(hadSpeed(sched.P) ? 'END' + posted : 'END', endP, backP ? O : P, endP - L, 'past the work', P, { end: true, ...(backP ? { frame: 'fr' + O, back: true } : {}) });
   if (sched.O.length) sign(hadSpeed(sched.O) ? 'END' + posted : 'END', endO, backO ? P : O, -endO, 'past the work', O, { end: true, ...(backO ? { frame: 'fr' + P, back: true } : {}) });
 
@@ -4269,7 +4285,8 @@ function buildChecks(s, d, job) {
     add('mob-moa', (d.site.state || 'VIC') === 'VIC' ? 'warn' : 'todo', 'Vehicle-mounted devices on the MOA', 'The approval\'s device list must cover the vehicle-mounted signs, arrow boards and any speed signs; some MOAs list only static devices.', 'Victorian Code of Practice (MOA)', { confirmable: true, confirmLabel: 'On the MOA' });
     add('mob-radio', 'todo', 'One radio channel for the convoy', 'Every driver, worker on foot and plant operator on a dedicated two-way radio channel; phones are not enough. Arrow boards checked before starting and every two hours.', 'AGTTM Part 4 s3.8.8; Part 6 Table 7.1', { confirmable: true, confirmLabel: 'Done' });
   }
-  if (s.method === 'turnlane') add('turn-movement', 'warn', `The ${s.z?.turn || ''} turn is lost while the lane is closed`.replace('  ', ' '), `Ban the turn (NO ${String(s.z?.turn || 'left').toUpperCase()} TURN, with the road manager's approval) and show the route drivers take instead, or hold the turn with a controller. Never imply turning from a through lane whose arrows say otherwise.${d.road.signals ? ' At the traffic lights, ask DTP to hold or suppress the turn arrow and keep plant off the detector loops.' : ''}`, 'AGTTM Part 9 Layouts 20, 22, 23', { confirmable: true, confirmLabel: 'Route planned' });
+  if (s.method === 'turnlane' && d.road.turnLanes === 2) add('turn-movement', 'pass', `The ${s.z?.turn || ''} turn stays open in the other lane`.replace('  ', ' '), 'Two turn lanes: one is closed and turning traffic uses the other. Check the lane status sign shows the open lane, and that the open lane takes the turning traffic at peak times.', 'AGTTM Part 3 s5.9');
+  else if (s.method === 'turnlane') add('turn-movement', 'warn', `The ${s.z?.turn || ''} turn is lost while the lane is closed`.replace('  ', ' '), `Ban the turn (NO ${String(s.z?.turn || 'left').toUpperCase()} TURN, with the road manager's approval) and show the route drivers take instead, or hold the turn with a controller. Never imply turning from a through lane whose arrows say otherwise.${d.road.signals ? ' At the traffic lights, ask DTP to hold or suppress the turn arrow and keep plant off the detector loops.' : ''}`, 'AGTTM Part 9 Layouts 20, 22, 23', { confirmable: true, confirmLabel: 'Route planned' });
   if (d.work.access) {
     add('access-sight', 'todo', `Truck access at least ${v} m from any intersection, taper, ramp or blind crest`, `Put the access point where drivers see trucks coming out: at least the speed limit in metres from an intersection, a taper, a ramp or anything that blocks the view (AGTTM Part 3 s2.5.2). Trucks don't exit through a red signal; use another exit at least ${v} m away.`, 'AGTTM Part 3 s2.5.2', { confirmable: true, confirmLabel: 'Checked' });
     add('access-move', s.category.cat >= 2 || v >= 60 ? 'warn' : 'todo', 'Trucks in and out with the traffic', `Forward in and forward out with the flow of traffic. Reversing in, or crossing the other direction's traffic, needs a controller or portable signals holding traffic${s.category.cat >= 2 || v >= 60 ? '; on this road plan for one at the access point' : ''}.`, 'AGTTM Part 3 s2.5.2; Part 9 Layout 9', { confirmable: true, confirmLabel: 'Planned' });
@@ -7786,7 +7803,7 @@ function stepRoad(d) {
       ${toggleBtn('road.bus', r.bus, 'Bus route or stop', 'Operator gets told about the works', 'bus', f.bus)}
       ${toggleBtn('road.tram', r.tram, 'Tram tracks', 'Tram operator rules apply', 'tram', f.tram)}
       ${toggleBtn('road.school', r.school, 'School nearby', 'Check school zone times', 'school', f.school)}
-      ${r.layout !== '1W' ? `<div class="field"><span class="label">Turn lane at the intersection ahead (${esc(d.site.dirA || 'inbound')})</span>${chipSet('road.turn', r.turn || 'none', [['none', 'None'], ['left', 'Left-turn lane'], ['right', 'Right-turn lane']])}</div>` : ''}
+      ${r.layout !== '1W' ? `<div class="field"><span class="label">Turn lane at the intersection ahead (${esc(d.site.dirA || 'inbound')})</span>${chipSet('road.turn', r.turn || 'none', [['none', 'None'], ['left', 'Left-turn lane'], ['right', 'Right-turn lane']])}${r.turn && r.turn !== 'none' ? chipSet('road.turnLanes', r.turnLanes || 1, [[1, 'One turn lane'], [2, 'Two turn lanes']]) : ''}</div>` : ''}
       ${toggleBtn('road.unsealed', r.unsealed, 'Unsealed (gravel) road', 'Normally unsealed: grading can run as moving work', 'road')}
       ${toggleBtn('road.intersection', r.intersection, 'Side street within 50 m', 'Turning traffic enters the site', 'road', f.intersection)}
       ${toggleBtn('road.signals', r.signals, 'Traffic lights within 100 m', 'Makes it Category 2 and may be traffic impact works', 'signal', f.signals)}
@@ -7912,6 +7929,7 @@ function stepControl(d) {
       ${toggleBtn('control.tma', c.tma, 'Truck mounted attenuator', gear('tma', 'Crash cushion truck behind the work'), 'truck')}
       ${c.method === 'grading' ? `<div class="field"><span class="label">The grading section</span><div class="toggles">${toggleBtn('work.grade.windrow', d.work.grade?.windrow, 'Windrow left in the lane', 'GRADER AHEAD 100 m before it', 'road')}${toggleBtn('work.grade.clearSight', d.work.grade?.clearSight, 'Grader seen from 250 m everywhere', 'Then no advance signs are needed (confirm on site)', 'eye')}</div>${chipSet('work.grade.km', d.work.grade?.km || 2, [[2, '2 km'], [5, '5 km'], [10, '10 km']])}<p class="muted" style="font-size:13px">Section length: 10 km at most, 2 km sub-sections where sight is short.</p></div>` : ''}
       ${c.method === 'mobile' ? `<div class="field"><span class="label">The convoy</span><div class="toggles">${toggleBtn('work.mobile.onFoot', d.work.mobile?.onFoot, 'Workers on foot', 'In the lane or within 1.2 m: a 40 km/h mobile zone applies (AGTTM Part 4 s3.8.4)', 'walk')}${toggleBtn('work.mobile.sightOK', d.work.mobile?.sightOK, 'On the shoulder, good sight distance', 'Drivers see the work vehicle from 250 m (150 m at 60 km/h or less): one vehicle and ROAD PLANT AHEAD / NEXT 2 km, no convoy (AGTTM Part 4 s3.7.3.1)', 'eye')}</div>${chipSet('work.mobile.speed', d.work.mobile?.speed || 10, [[5, '5 km/h'], [10, '10 km/h'], [20, '20 km/h'], [40, '40 km/h']])}<p class="muted" style="font-size:13px">Work vehicle speed. Within 20 km/h of the limit it is Class 1: no convoy needed.</p>${chipSet('work.mobile.vehicles', d.work.mobile?.vehicles || 1, [[1, '1 work vehicle'], [2, '2'], [3, '3']])}</div>` : ''}
+      ${(d.site.speed || 60) >= 70 ? `<div class="toggles">${toggleBtn('control.vms', c.vms, 'VMS board on each approach', 'ROADWORK AHEAD / EXPECT DELAYS, 200 m before the first sign (rural highways, Category 3 roads)', 'road')}</div>` : ''}
       ${d.site.speed >= 80 && (d.road.layout === 'DIV' || d.road.layout === '4L2W' || d.road.layout === '1W') ? toggleBtn('control.chicane', c.chicane, 'Chicane for right-lane works', 'Close the left lane first, then shift traffic back left past the work, instead of a right-to-left merge at speed (AGTTM Part 3 s5.9.2)', 'road') : ''}
       ${toggleBtn('control.arrow', c.arrow, 'Arrow board', gear('arrow', 'Flashing arrow for lane closures'), 'right')}
       ${toggleBtn('control.vms', c.vms, 'Message board (VMS)', gear('vms', 'Advance notice to drivers'), 'info')}
